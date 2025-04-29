@@ -5,6 +5,8 @@ from torch.utils.data import DataLoader
 from data_utils import preprocessor, TranslitDataset, collate_fn
 import torch.nn.functional as F
 from tqdm import tqdm
+from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
+import random
 
 @dataclass
 class TranslitModelConfig:
@@ -151,6 +153,8 @@ testset = TranslitDataset(test_data_path)
 
 
 trainloader = DataLoader(trainset, batch_size=128, collate_fn=collate_fn, shuffle=True)
+validloader = DataLoader(validset, batch_size=128, collate_fn=collate_fn, shuffle=False)
+testloader = DataLoader(testset, batch_size=128, collate_fn=collate_fn, shuffle=False)
 
 config = TranslitModelConfig(
     decoder_SOS=trainset.target.SOS,
@@ -162,16 +166,17 @@ device = "cuda"
 
 model = TranslitModel(config).to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-max_epochs=10
+max_epochs=1
 
 for epoch in range(max_epochs):
+    model.train()
     loss_track = 0
     acc_track = 0
-    for x, y in tqdm(trainloader):
+    for x, y in tqdm(trainloader, desc=f"Epoch {epoch+1}, Training "):
         x = x.to(device)
         y = y.to(device)
         out = model(x, y)
-        loss, acc, decoder_outputs = out
+        loss, acc, _ = out
         
         optimizer.zero_grad()
         loss.backward()
@@ -182,12 +187,82 @@ for epoch in range(max_epochs):
         
     avg_loss = loss_track/len(trainloader)
     avg_acc = acc_track/len(trainloader)
+    
+    model.eval()
+    valid_loss_track, valid_acc_track = 0, 0
+    with torch.no_grad():
+        for x, y in tqdm(validloader, desc=f"Epoch {epoch+1}, Validation "):
+            x = x.to(device)
+            y = y.to(device)
+            out = model(x, y)
+            loss, acc, _ = out
+            valid_loss_track += loss.item()
+            valid_acc_track += acc.item()
+        
+        avg_valid_loss = valid_loss_track/len(validloader)
+        avg_valid_acc = valid_acc_track/len(validloader)
 
-    print(f"Epoch : {epoch+1} | Loss : {avg_loss:.4f} | Accuracy : {avg_acc:.4f}")
+    print(f"Epoch : {epoch+1} | Train loss : {avg_loss:.4f} | Train accuracy : {avg_acc:.4f} | Valid loss : {avg_valid_loss:.4f} | Valid accuracy : {avg_valid_acc:.4f}")
+        
+      
+
+def BleuScore(refs, hyps):
+    total_bleu = 0
+    count = 0
+    targets = []
+    preds = []
+    for ref_seq, hyp_seq in zip(refs, hyps):
+        eos_idx_ref = (ref_seq == testset.target.EOS).nonzero(as_tuple=True)[0]
+        eos_idx_hyp = (hyp_seq == testset.target.EOS).nonzero(as_tuple=True)[0]
+        ref_trimmed = ref_seq[:eos_idx_ref[0].item()] if len(eos_idx_ref) > 0 else ref_seq
+        hyp_trimmed = hyp_seq[:eos_idx_hyp[0].item()] if len(eos_idx_hyp) > 0 else hyp_seq
+
+        ref_text = testset.target.itos(ref_trimmed)
+        hyp_text = testset.target.itos(hyp_trimmed)
+        
+        targets.append(ref_text)
+        preds.append(hyp_text)
+        
+        ref_text_split = list(ref_text)
+        hyp_text_split = list(hyp_text)
+        
+        bleu = sentence_bleu([ref_text_split], hyp_text_split, smoothing_function=SmoothingFunction().method1)
+        total_bleu += bleu
+        count += 1
+
+    bleu = total_bleu / count if count > 0 else 0.0
+    return bleu, targets, preds
+
         
         
-        
-        
+# Inference:
+model.eval()
+with torch.no_grad():
+    all_refs = []
+    all_hyps = []
+    for x, y in tqdm(testloader, desc=f"Epoch {epoch+1}, Inference"):
+        x = x.to(device)
+        out = model(x)
+        _, _, decoder_outputs = out
 
+        decoder_outputs = decoder_outputs.detach().cpu()
+        y = y.cpu()
 
+        probs = F.log_softmax(decoder_outputs, dim=-1)
+        preds = torch.argmax(probs, dim=-1)
 
+        all_refs.extend(list(y))
+        all_hyps.extend(list(preds))
+
+    score, targets, preds = BleuScore(all_refs, all_hyps)
+    
+    idx = list(range(len(targets)))
+    random.shuffle(idx)
+    
+    print("BLEU score:", score)
+    
+    print("Samples:\n")
+    print("Targets\tPredictions")
+    for i in idx[:20]:
+        print(f"{targets[i]}\t{preds[i]}")    
+    
