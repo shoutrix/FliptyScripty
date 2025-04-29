@@ -14,8 +14,8 @@ class TranslitModelConfig:
     target_vocab_size: int = 500
     embedding_size: int = 256
     hidden_size: int = 512
-    encoder_num_layers: int = 2
-    decoder_num_layers: int = 2
+    encoder_num_layers: int = 4
+    decoder_num_layers: int = 3
     encoder_name: str = "GRU"   # options: "rnn", "lstm", "gru"
     decoder_name: str = "GRU"   # options: "rnn", "lstm", "gru"
     encoder_bidirectional: bool = True
@@ -108,7 +108,23 @@ class DecoderRNN(nn.Module):
         return output, h_n
 
 
-
+class Projection(nn.Module):
+    def __init__(self, args):
+        super().__init__()
+        self.args = args
+        self.encoder_D = 2 if args.encoder_bidirectional else 1
+        self.decoder_D = 2 if args.decoder_bidirectional else 1
+        encoder_out_shape = self.encoder_D * args.encoder_num_layers * args.hidden_size
+        decoder_in_shape = self.decoder_D * args.decoder_num_layers * args.hidden_size
+        self.linear = nn.Linear(encoder_out_shape, decoder_in_shape)
+    
+    def forward(self, x):
+        B = x.shape[1]
+        x = x.transpose(0, 1).contiguous().view(B, -1)
+        x_proj = self.linear(x)
+        x_proj = x_proj.view(self.decoder_D * self.args.decoder_num_layers, B, self.args.hidden_size)
+        return x_proj
+        
 
 class TranslitModel(nn.Module):
     def __init__(self, args: TranslitModelConfig):
@@ -116,12 +132,26 @@ class TranslitModel(nn.Module):
         self.args = args
         self.encoder = EncoderRNN(args)
         self.decoder = DecoderRNN(args)
+        
+        # if args.encoder_num_layers != args.decoder_num_layers:
+        #     self.projection = Projection(args)   
+        # else:
+        #     self.projection = None     
         self.loss_fn = nn.CrossEntropyLoss()
     
     
     def forward(self, source, target=None):
         encoder_outputs, encoder_hidden = self.encoder(source)
         # print("encoder_outputs : ", encoder_outputs.shape, encoder_hidden.shape)
+        # if self.projection:
+        #     encoder_hidden = self.projection(encoder_hidden)
+        decoder_expected_size = 2*self.args.decoder_num_layers if self.args.decoder_bidirectional else self.args.decoder_num_layers
+        if decoder_expected_size <= encoder_hidden.shape[0]:
+            encoder_hidden = encoder_hidden[:decoder_expected_size, :, :]
+        else:
+            diff = decoder_expected_size - encoder_hidden.shape[0]
+            encoder_hidden = torch.cat((encoder_hidden, encoder_hidden[:diff]), dim=0)
+            
         decoder_outputs = self.decoder(encoder_outputs, encoder_hidden, target)
         
         loss, acc = None, None
@@ -165,8 +195,11 @@ config = TranslitModelConfig(
 device = "cuda"
 
 model = TranslitModel(config).to(device)
-optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-max_epochs=1
+print(model)
+numel = sum([param.numel() for param in model.parameters()])
+print("Number of parameters : ", numel)
+optimizer = torch.optim.Adam(model.parameters(), lr=0.0005, weight_decay=0.0005)
+max_epochs=5
 
 for epoch in range(max_epochs):
     model.train()
