@@ -16,13 +16,14 @@ class TranslitModelConfig:
     hidden_size: int = 512
     encoder_num_layers: int = 4
     decoder_num_layers: int = 3
-    encoder_name: str = "GRU"   # options: "rnn", "lstm", "gru"
-    decoder_name: str = "GRU"   # options: "rnn", "lstm", "gru"
+    encoder_name: str = "GRU"
+    decoder_name: str = "GRU"
     encoder_bidirectional: bool = True
     decoder_bidirectional: bool = True
     dropout_p: float = 0.3
     max_length: int = 64
     decoder_SOS: int = 0
+    teacher_forcing_p: float = 1 # only works for 1 for now
 
     def __post_init__(self):
         assert self.encoder_name in ["RNN", "GRU"], f"Invalid encoder name: {self.encoder_name}. Must be 'rnn', 'lstm', or 'gru'."
@@ -108,6 +109,67 @@ class DecoderRNN(nn.Module):
         return output, h_n
 
 
+class EncoderAttnRNN(nn.Module):
+    def __init__(self, args):
+        super().__init__()
+        self.args = args
+        self.embedding = nn.Embedding(args.source_vocab_size, args.embedding_size)
+        self.dropout = nn.Dropout(args.dropout_p)
+        self.rnn = getattr(nn, args.encoder_name)(
+            input_size=args.embedding_size,
+            hidden_size=args.hidden_size,
+            num_layers=args.encoder_num_layers,
+            batch_first=True,
+            dropout=args.dropout_p if args.encoder_num_layers > 1 else 0.0,
+            bidirectional=args.encoder_bidirectional
+        )
+        self.final_dropout = nn.Dropout(args.dropout_p)
+
+    def forward(self, x):
+        N, max_length = x.shape
+        D = 2 if self.args.encoder_bidirectional else 1
+        hidden_state = torch.zeros(D * self.args.encoder_num_layers, N, self.args.hidden_size, device=x.device)
+
+        encoder_hidden_states = []
+        encoder_outs = []
+        for i in range(max_length):
+            out, hidden_state = self.forward_one_step(x[:, i], hidden_state)
+            encoder_outs.append(out.squeeze(1))
+            encoder_hidden_states.append(hidden_state)
+
+        encoder_outs = torch.stack(encoder_outs, dim=1) # N, L, Hout
+        encoder_hidden_states = torch.cat(encoder_hidden_states, dim=2) # (D * num_layers, N, L, Hout)
+        return encoder_outs, encoder_hidden_states # returned as a list for now
+
+    def forward_one_step(self, input_, hidden_state):
+        input_ = input_.unsqueeze(1)
+        embeds = self.dropout(self.embedding(input_))
+        output, hidden = self.rnn(embeds, hidden_state)
+        output = self.final_dropout(output)
+        if isinstance(hidden, tuple): 
+            h_n, _ = hidden
+        else:
+            h_n = hidden
+        return output, h_n
+        
+
+class DecoderAttnRNN(nn.Module):
+    def __init__(self, args):
+        super().__init__()
+        self.args = args
+        pass
+
+    def forward(self, encoder_outputs, encoder_hidden_states, target=None):
+        
+        
+        
+    
+    def forward_one_step(self, decoder_input, decoder_hidden):
+        pass
+    
+
+
+
 class Projection(nn.Module):
     def __init__(self, args):
         super().__init__()
@@ -132,27 +194,19 @@ class TranslitModel(nn.Module):
         self.args = args
         self.encoder = EncoderRNN(args)
         self.decoder = DecoderRNN(args)
-        
-        # if args.encoder_num_layers != args.decoder_num_layers:
-        #     self.projection = Projection(args)   
-        # else:
-        #     self.projection = None     
         self.loss_fn = nn.CrossEntropyLoss()
     
     
     def forward(self, source, target=None):
-        encoder_outputs, encoder_hidden = self.encoder(source)
-        # print("encoder_outputs : ", encoder_outputs.shape, encoder_hidden.shape)
-        # if self.projection:
-        #     encoder_hidden = self.projection(encoder_hidden)
+        encoder_outputs, encoder_hidden_final = self.encoder(source)
         decoder_expected_size = 2*self.args.decoder_num_layers if self.args.decoder_bidirectional else self.args.decoder_num_layers
-        if decoder_expected_size <= encoder_hidden.shape[0]:
-            encoder_hidden = encoder_hidden[:decoder_expected_size, :, :]
+        if decoder_expected_size <= encoder_hidden_final.shape[0]:
+            encoder_hidden_final = encoder_hidden_final[:decoder_expected_size, :, :]
         else:
-            diff = decoder_expected_size - encoder_hidden.shape[0]
-            encoder_hidden = torch.cat((encoder_hidden, encoder_hidden[:diff]), dim=0)
+            diff = decoder_expected_size - encoder_hidden_final.shape[0]
+            encoder_hidden_final = torch.cat((encoder_hidden_final, encoder_hidden_final[:diff]), dim=0)
             
-        decoder_outputs = self.decoder(encoder_outputs, encoder_hidden, target)
+        decoder_outputs = self.decoder(encoder_outputs, encoder_hidden_final, target)
         
         loss, acc = None, None
         if target is not None:
@@ -182,9 +236,9 @@ validset = TranslitDataset(dev_data_path)
 testset = TranslitDataset(test_data_path)
 
 
-trainloader = DataLoader(trainset, batch_size=128, collate_fn=collate_fn, shuffle=True)
-validloader = DataLoader(validset, batch_size=128, collate_fn=collate_fn, shuffle=False)
-testloader = DataLoader(testset, batch_size=128, collate_fn=collate_fn, shuffle=False)
+trainloader = DataLoader(trainset, batch_size=128, collate_fn=collate_fn, shuffle=True, num_workers=8, persistent_workers=True, pin_memory=True)
+validloader = DataLoader(validset, batch_size=128, collate_fn=collate_fn, shuffle=False, num_workers=8, persistent_workers=True, pin_memory=True)
+testloader = DataLoader(testset, batch_size=128, collate_fn=collate_fn, shuffle=False, num_workers=8, persistent_workers=True, pin_memory=True)
 
 config = TranslitModelConfig(
     decoder_SOS=trainset.target.SOS,
@@ -192,9 +246,12 @@ config = TranslitModelConfig(
     target_vocab_size=trainset.target.vocab_size
     )
 
-device = "cuda"
 
+device = "cuda" if torch.cuda.is_available() else "cpu"
 model = TranslitModel(config).to(device)
+autocast_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+
+
 print(model)
 numel = sum([param.numel() for param in model.parameters()])
 print("Number of parameters : ", numel)
@@ -206,10 +263,16 @@ for epoch in range(max_epochs):
     loss_track = 0
     acc_track = 0
     for x, y in tqdm(trainloader, desc=f"Epoch {epoch+1}, Training "):
-        x = x.to(device)
-        y = y.to(device)
-        out = model(x, y)
-        loss, acc, _ = out
+        x = x.to(device, non_blocking=True)
+        
+        if torch.rand(1) <= config.teacher_forcing_p:
+            y = y.to(device, non_blocking=True)
+        else:
+            y = None
+        
+        with torch.autocast(device_type=device, dtype=autocast_dtype):
+            out = model(x, y)
+            loss, acc, _ = out
         
         optimizer.zero_grad()
         loss.backward()
@@ -225,10 +288,11 @@ for epoch in range(max_epochs):
     valid_loss_track, valid_acc_track = 0, 0
     with torch.no_grad():
         for x, y in tqdm(validloader, desc=f"Epoch {epoch+1}, Validation "):
-            x = x.to(device)
-            y = y.to(device)
-            out = model(x, y)
-            loss, acc, _ = out
+            x = x.to(device, non_blocking=True)
+            y = None
+            with torch.autocast(device_type=device, dtype=autocast_dtype):
+                out = model(x, y)
+                loss, acc, _ = out
             valid_loss_track += loss.item()
             valid_acc_track += acc.item()
         
@@ -274,9 +338,10 @@ with torch.no_grad():
     all_refs = []
     all_hyps = []
     for x, y in tqdm(testloader, desc=f"Epoch {epoch+1}, Inference"):
-        x = x.to(device)
-        out = model(x)
-        _, _, decoder_outputs = out
+        x = x.to(device, non_blocking=True)
+        with torch.autocast(device_type=device, dtype=autocast_dtype):
+            out = model(x)
+            _, _, decoder_outputs = out
 
         decoder_outputs = decoder_outputs.detach().cpu()
         y = y.cpu()
