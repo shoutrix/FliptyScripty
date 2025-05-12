@@ -43,7 +43,7 @@ class Lang:
         self.EOS = self.stoi_dict.get("</s>")
         self.UNK = self.stoi_dict.get("<unk>")
 
-        self.data = list(data_column)
+        self.data = data_column
         self.vocab_size = len(self.stoi_dict)+1
 
     def stoi(self, str_: str):
@@ -53,25 +53,33 @@ class Lang:
         return "".join([self.itos_dict.get(idx.item(), "<unk>") for idx in idxs])
 
     def __getitem__(self, idx):
-        word = self.data[idx]
+        word = self.data.iloc[idx]
         word_tokenized = self.stoi(word)
         return word_tokenized + [self.EOS]
 
-            
-        
 
 class TranslitDataset:
-    def __init__(self, data_path):
+    def __init__(self, data_path, normalize=False):
         assert data_path.endswith(".tsv")
         with open(data_path, "r", encoding="utf-8") as f:
             lines = f.read().splitlines()
-        
-        data = []
-        for line in lines:
-            parts = line.strip().split("\t")
-            if len(parts) >= 2:
-                data.append({"source": parts[0], "target": parts[1]})
-        
+            
+        if normalize:
+            data = {}
+            for line in lines:
+                parts = line.strip().split("\t")
+                if len(parts) >= 2:
+                    source_word, target_word, n_attestation = parts
+                    if not source_word in data.keys() or (source_word in data.keys() and n_attestation > data[source_word]["n_attestation"]):
+                        data[source_word] = {"target":target_word, "n_attestation":n_attestation}
+            data = [{"source":k, "target":v["target"]} for k, v in data.items()]
+        else:
+            data = []
+            for line in lines:
+                parts = line.strip().split("\t")
+                if len(parts) >= 2:
+                    data.append({"source":parts[0], "target":parts[1]})
+                            
         self.df = pd.DataFrame(data)
 
         self.source = Lang(self.df["source"], "dump/source_vocab.txt")
