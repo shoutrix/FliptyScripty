@@ -142,20 +142,19 @@ class Trainer:
                 all_refs.extend(list(y))
                 all_hyps.extend(list(preds))
 
-            bleu_, targets, preds = self.scoring(all_refs, all_hyps)
+            bleu_, targets, preds = self.scoring(all_refs, all_hyps, testloader.dataset)
             
             idx = list(range(len(targets)))
             random.shuffle(idx)
             
             print("BLEU score:", bleu_)
             
-            print("Samples:\n")
-            print("Targets\tPredictions")
-            for i in idx[:20]:
-                print(f"{targets[i]}\t{preds[i]}") 
+            with open("results.txt", "w", encoding="utf-8") as f:
+                f.write("TARGETS\tPREDICTIONS\n\n")
+                f.write("\n".join([f"{t}\t{p}" for t, p in zip(targets, preds)]))
  
 
-    def scoring(self, refs, hyps):
+    def scoring(self, refs, hyps, testset):
         total_bleu = 0
         count = 0
         targets = []

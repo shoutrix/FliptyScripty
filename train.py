@@ -15,8 +15,8 @@ lang_map = {"bengali":"bn",
             "telugu":"te",
             "urdu":"ur"}
 
-language = "bengali"
-data_path = "/speech/shoutrik/torch_exp/FliptyScripty/dakshina_dataset_v1.0/"
+language = "hindi"
+data_path = "/speech/shoutrik/Databases/dakshina_dataset_v1.0"
 
                    
 train_data_path = os.path.join(data_path, f"{lang_map[language]}/lexicons/{lang_map[language]}.translit.sampled.train.tsv")
