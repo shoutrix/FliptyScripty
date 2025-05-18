@@ -27,8 +27,8 @@ class TranslitModelConfig:
     apply_attention: bool = True
 
     def __post_init__(self):
-        assert self.encoder_name in ["RNN", "GRU"], f"Invalid encoder name: {self.encoder_name}. Must be 'rnn', 'lstm', or 'gru'."
-        assert self.decoder_name in ["RNN", "GRU"], f"Invalid decoder name: {self.decoder_name}. Must be 'rnn', 'lstm', or 'gru'."
+        assert self.encoder_name in ["RNN", "GRU", "LSTM"], f"Invalid encoder name: {self.encoder_name}. Must be 'RNN', 'LSTM', or 'GRU'."
+        assert self.decoder_name in ["RNN", "GRU", "LSTM"], f"Invalid decoder name: {self.decoder_name}. Must be 'RNN', 'LSTM', or 'GRU'."
 
 
 class EncoderRNN(nn.Module):
@@ -104,6 +104,8 @@ class DecoderRNN(nn.Module):
         assert decoder_input.shape[1] == 1
         embeds = self.relu(self.embedding(decoder_input))
         embeds = self.dropout(embeds)
+        if self.args.decoder_name == "LSTM":
+            decoder_hidden = (decoder_hidden, None)
         output, hidden = self.rnn(embeds, decoder_hidden)
         if isinstance(hidden, tuple):
             h_n, _ = hidden
@@ -184,7 +186,8 @@ class DecoderAttnRNN(nn.Module):
         embeds = self.dropout(embeds)
         context = self.attention(encoder_outputs, decoder_hidden)
         input_ = torch.cat((embeds, context), dim=2) # N, 1, D*Hout
-        # print("gru input shape : ", input_.shape)
+        if self.args.decoder_name == "LSTM":
+            decoder_hidden = (decoder_hidden, None)
         output, hidden = self.rnn(input_, decoder_hidden)
         if isinstance(hidden, tuple):
             h_n, _ = hidden

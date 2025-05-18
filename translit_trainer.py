@@ -2,19 +2,33 @@ import torch
 import torch.nn as nn
 from dataclasses import dataclass
 from torch.utils.data import DataLoader
-from data_utils import collate_fn, TranslitDataset
+from data_utils import collate_fn, TranslitDataset, preprocessor
 import torch.nn.functional as F
 from tqdm import tqdm
 from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
 import random
 from translit_model import TranslitModelConfig, TranslitModel
+import os
+import wandb
 
-
+lang_map = {
+    "bengali": "bn",
+    "gujarati": "gu",
+    "hindi": "hi",
+    "kannada": "kn",
+    "malayalam": "ml",
+    "marathi": "mr",
+    "punjabi": "pa",
+    "sindhi": "sd",
+    "sinhala": "si",
+    "tamil": "ta",
+    "telugu": "te",
+    "urdu": "ur"}
 
 @dataclass
 class TrainerConfig:
-    trainset: TranslitDataset
-    validset: TranslitDataset
+    language:str = "hindi",
+    data_path:str = "",
     batch_size:int = 64,
     num_workers:int = 16,
     learning_rate:float = 0.003,
@@ -33,18 +47,37 @@ class TrainerConfig:
     decoder_SOS: int = 0
     teacher_forcing_p: float = 0.8
     apply_attention: bool = True
-
     
+    def __post_init__(self):
+        if self.language not in lang_map:
+            raise ValueError(f"Unsupported language '{self.language}'. Supported options: {list(lang_map.keys())}")
+        self.lang_code = lang_map[self.language]
+        self.train_data_path = os.path.join(self.data_path, f"{self.lang_code}/lexicons/{self.lang_code}.translit.sampled.train.tsv")
+        self.dev_data_path = os.path.join(self.data_path, f"{self.lang_code}/lexicons/{self.lang_code}.translit.sampled.dev.tsv")
+        self.test_data_path = os.path.join(self.data_path, f"{self.lang_code}/lexicons/{self.lang_code}.translit.sampled.test.tsv")
+        if not all(os.path.exists(path) for path in [self.train_data_path, self.dev_data_path, self.test_data_path]):
+            raise FileNotFoundError(f"Data files not found in {self.data_path}. Please check the paths.")
+            
+        
 class Trainer:
     def __init__(self, config:TrainerConfig):
+
+        preprocessor(config.train_data_path, config.dev_data_path)
+
+        trainset = TranslitDataset(config.train_data_path, normalize=True)
+        validset = TranslitDataset(config.dev_data_path, normalize=False)   
+        testset = TranslitDataset(config.test_data_path, normalize=False)
         
-        self.trainloader = DataLoader(config.trainset, batch_size=config.batch_size, collate_fn=collate_fn, shuffle=True, num_workers=config.num_workers, persistent_workers=True, pin_memory=True)
-        self.validloader = DataLoader(config.validset, batch_size=config.batch_size, collate_fn=collate_fn, shuffle=False, num_workers=config.num_workers, persistent_workers=True, pin_memory=True)
+        # print("NUM_WORKERE : ", config.num_workers)
+        
+        self.trainloader = DataLoader(trainset, batch_size=config.batch_size, collate_fn=collate_fn, shuffle=True, num_workers=config.num_workers, persistent_workers=True, pin_memory=True)
+        self.validloader = DataLoader(validset, batch_size=config.batch_size, collate_fn=collate_fn, shuffle=False, num_workers=config.num_workers, persistent_workers=True, pin_memory=True)
+        self.testloader = DataLoader(testset, batch_size=config.batch_size, collate_fn=collate_fn, shuffle=False, num_workers=config.num_workers, persistent_workers=True, pin_memory=True)
 
         model_config = TranslitModelConfig(
-            decoder_SOS=config.trainset.target.SOS,
-            source_vocab_size=config.trainset.source.vocab_size,
-            target_vocab_size=config.trainset.target.vocab_size,
+            decoder_SOS=trainset.target.SOS,
+            source_vocab_size=trainset.source.vocab_size,
+            target_vocab_size=trainset.target.vocab_size,
             embedding_size=config.embedding_size,
             hidden_size=config.hidden_size,
             encoder_num_layers=config.encoder_num_layers,
@@ -59,10 +92,11 @@ class Trainer:
             )
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        print(f"Setting device to : {self.device}")
         self.model = TranslitModel(model_config).to(self.device)
         self.autocast_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-
-
+        print("Setting autocast dtype to : ", self.autocast_dtype)
+        print("Model architecture : ")
         print(self.model)
         numel = sum([param.numel() for param in self.model.parameters()])
         print("Number of parameters : ", numel)
@@ -76,6 +110,12 @@ class Trainer:
             avg_loss, avg_acc = self.train_one_epoch(epoch)
             avg_valid_loss, avg_valid_acc = self.validate_one_epoch(epoch)
             print(f"Epoch : {epoch+1} | Train loss : {avg_loss:.4f} | Train accuracy : {avg_acc:.4f} | Valid loss : {avg_valid_loss:.4f} | Valid accuracy : {avg_valid_acc:.4f}")
+            wandb.log({
+                "train_loss": avg_loss,
+                "train_accuracy": avg_acc,
+                "valid_loss": avg_valid_loss,
+                "valid_accuracy": avg_valid_acc,
+            })
         print("Training Finished !!!")
         
 
@@ -120,14 +160,13 @@ class Trainer:
         return avg_valid_loss, avg_valid_acc
     
 
-    def inference(self, testset):
+    def inference(self):
         print("Starting inference ...")
-        testloader = DataLoader(testset, batch_size=self.config.batch_size, collate_fn=collate_fn, shuffle=False, num_workers=self.config.num_workers, persistent_workers=True, pin_memory=True)
         self.model.eval()
         with torch.no_grad():
             all_refs = []
             all_hyps = []
-            for x, y in tqdm(testloader):
+            for x, y in tqdm(self.testloader):
                 x = x.to(self.device, non_blocking=True)
                 with torch.autocast(device_type=self.device, dtype=self.autocast_dtype):
                     out = self.model(x, teacher_forcing_p=0)
@@ -142,12 +181,13 @@ class Trainer:
                 all_refs.extend(list(y))
                 all_hyps.extend(list(preds))
 
-            bleu_, targets, preds = self.scoring(all_refs, all_hyps, testloader.dataset)
+            bleu_, targets, preds = self.scoring(all_refs, all_hyps, self.testloader.dataset)
             
             idx = list(range(len(targets)))
             random.shuffle(idx)
             
             print("BLEU score:", bleu_)
+            wandb.log({"bleu_score": bleu_})
             
             with open("results.txt", "w", encoding="utf-8") as f:
                 f.write("TARGETS\tPREDICTIONS\n\n")
