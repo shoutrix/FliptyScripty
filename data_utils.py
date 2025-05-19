@@ -11,10 +11,10 @@ def preprocessor(train_data_path, valid_data_path):
         train_lines = ft.read().splitlines()
         valid_lines = fv.read().splitlines()
             
-    train_source_chars = set("".join([l.strip().split(maxsplit=1)[0] for l in train_lines]))
-    train_target_chars = set("".join([l.strip().split(maxsplit=1)[1] for l in train_lines]))
-    valid_source_chars = set("".join([l.strip().split(maxsplit=1)[0] for l in valid_lines]))
-    valid_target_chars = set("".join([l.strip().split(maxsplit=1)[1] for l in valid_lines]))
+    train_source_chars = set("".join([l.strip().split(maxsplit=1)[1] for l in train_lines]))
+    train_target_chars = set("".join([l.strip().split(maxsplit=1)[0] for l in train_lines]))
+    valid_source_chars = set("".join([l.strip().split(maxsplit=1)[1] for l in valid_lines]))
+    valid_target_chars = set("".join([l.strip().split(maxsplit=1)[0] for l in valid_lines]))
 
     
     source_chars = list(train_source_chars | valid_source_chars)
@@ -69,7 +69,7 @@ class TranslitDataset:
             for line in lines:
                 parts = line.strip().split("\t")
                 if len(parts) >= 2:
-                    source_word, target_word, n_attestation = parts
+                    target_word, source_word, n_attestation = parts
                     if not source_word in data.keys() or (source_word in data.keys() and n_attestation > data[source_word]["n_attestation"]):
                         data[source_word] = {"target":target_word, "n_attestation":n_attestation}
             data = [{"source":k, "target":v["target"]} for k, v in data.items()]
@@ -78,7 +78,7 @@ class TranslitDataset:
             for line in lines:
                 parts = line.strip().split("\t")
                 if len(parts) >= 2:
-                    data.append({"source":parts[0], "target":parts[1]})
+                    data.append({"source":parts[1], "target":parts[0]})
                             
         self.df = pd.DataFrame(data)
 

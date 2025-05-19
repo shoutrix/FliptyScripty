@@ -47,6 +47,7 @@ class TrainerConfig:
     decoder_SOS: int = 0
     teacher_forcing_p: float = 0.8
     apply_attention: bool = True
+    logging: bool = False
     
     def __post_init__(self):
         if self.language not in lang_map:
@@ -60,7 +61,7 @@ class TrainerConfig:
             
         
 class Trainer:
-    def __init__(self, config:TrainerConfig):
+    def __init__(self, config:TrainerConfig, logging=False):
 
         preprocessor(config.train_data_path, config.dev_data_path)
 
@@ -102,6 +103,7 @@ class Trainer:
         print("Number of parameters : ", numel)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
         self.config = config
+        self.logging = logging
 
 
     def train(self):
@@ -110,12 +112,13 @@ class Trainer:
             avg_loss, avg_acc = self.train_one_epoch(epoch)
             avg_valid_loss, avg_valid_acc = self.validate_one_epoch(epoch)
             print(f"Epoch : {epoch+1} | Train loss : {avg_loss:.4f} | Train accuracy : {avg_acc:.4f} | Valid loss : {avg_valid_loss:.4f} | Valid accuracy : {avg_valid_acc:.4f}")
-            wandb.log({
-                "train_loss": avg_loss,
-                "train_accuracy": avg_acc,
-                "valid_loss": avg_valid_loss,
-                "valid_accuracy": avg_valid_acc,
-            })
+            if self.logging:
+                wandb.log({
+                    "train_loss": avg_loss,
+                    "train_accuracy": avg_acc,
+                    "valid_loss": avg_valid_loss,
+                    "valid_accuracy": avg_valid_acc,
+                })
         print("Training Finished !!!")
         
 
@@ -187,7 +190,14 @@ class Trainer:
             random.shuffle(idx)
             
             print("BLEU score:", bleu_)
-            wandb.log({"bleu_score": bleu_})
+            if self.logging:
+                wandb.log({"bleu_score": bleu_})
+                
+            idxs = random.sample(range(len(targets)+1), 10)
+            print("-------- Samples --------")
+            print(f"TARGETS\tPREDICTIONS")
+            for idx in idxs:
+                print(targets[idx], "\t", preds[idx])
             
             with open("results.txt", "w", encoding="utf-8") as f:
                 f.write("TARGETS\tPREDICTIONS\n\n")
