@@ -126,22 +126,20 @@ class BahdanauAttention(nn.Module):
         self.non_linearity = nn.Tanh()
         
     def forward(self, encoder_outputs, decoder_hidden):
+        
+        # print(decoder_hidden.shape, encoder_outputs.shape)
         B, T_enc, H_enc = encoder_outputs.size()
-        decoder_hidden = decoder_hidden[-1]  # (B, H_dec)
+        decoder_hidden = decoder_hidden[-1]
+        
+        encoder_features = self.We(encoder_outputs)
+        decoder_features = self.Wd(decoder_hidden).unsqueeze(1)
+        energy = torch.tanh(encoder_features + decoder_features)
+        scores = self.Wo(energy).squeeze(-1)
 
-        # Compute energy scores
-        encoder_features = self.We(encoder_outputs)  # (B, T_enc, H)
-        decoder_features = self.Wd(decoder_hidden).unsqueeze(1)  # (B, 1, H)
-        energy = self.non_linearity(encoder_features + decoder_features)  # (B, T_enc, H)
-        scores = self.Wo(energy).squeeze(-1)  # (B, T_enc)
+        attn_weights = F.softmax(scores, dim=-1)
 
-        # Attention weights
-        attn_weights = F.softmax(scores, dim=-1)  # (B, T_enc)
-
-        context = torch.bmm(attn_weights.unsqueeze(1), encoder_outputs)  # (B, 1, H_enc)
+        context = torch.bmm(attn_weights.unsqueeze(1), encoder_outputs)
         return context, attn_weights
-
-
 
 
 class DecoderAttnRNN(nn.Module):

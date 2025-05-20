@@ -11,6 +11,12 @@ from translit_model import TranslitModelConfig, TranslitModel
 import os
 import wandb
 import matplotlib.pyplot as plt
+from matplotlib import font_manager
+import numpy as np
+
+
+nirm = '/speech/shoutrik/torch_exp/FliptyScripty/Assignment3/Nirmala.ttf'
+
 
 lang_map = {
     "bengali": "bn",
@@ -168,7 +174,7 @@ class Trainer:
         return avg_valid_loss, avg_valid_acc
     
 
-    def inference(self):
+    def inference(self, plot_attention=False):
         print("Starting inference ...")
         self.model.eval()
         with torch.no_grad():
@@ -209,15 +215,22 @@ class Trainer:
             if self.logging:
                 wandb.log({"bleu_score": bleu_, "test_accuracy": acc})
                 
-            idxs = random.sample(range(len(targets)+1), 10)
-            # print("-------- Samples --------")
-            # print(f"TARGETS\tPREDICTIONS")
-            # for idx in idxs:
-            #     print(targets[idx], "\t", preds[idx])
+            idxs = random.sample(range(len(targets)+1), 9)
+
+            if plot_attention:
+                samples = []
+                for idx in idxs:
+                    sample = self.testloader.dataset.source.itos(self.testloader.dataset[idx][0])
+                    samples.append(sample)
+                print(samples)
+                    
+                self.predict_samples(samples, True)
             
             with open("results.txt", "w", encoding="utf-8") as f:
                 f.write("TARGETS\tPREDICTIONS\n\n")
                 f.write("\n".join([f"{t}\t{p}" for t, p in zip(targets, preds)]))
+                
+                
  
 
     def scoring(self, refs, hyps, testset):
@@ -248,45 +261,63 @@ class Trainer:
         return bleu, targets, preds
 
 
-    def predict_one(self, source_word, visualize_attention=False):
+    def predict_samples(self, source_words, visualize_attention=False):
+        attention_maps_list = []
         self.model.eval()
         with torch.no_grad():
-            s_idxs = self.trainloader.dataset.source.stoi(source_word) + [self.trainloader.dataset.source.EOS]
-            x = torch.tensor(s_idxs, dtype=torch.long).unsqueeze(0).to(self.device)
-            
-            out = self.model(x, teacher_forcing_p=0, beam_size=1, return_attention_map=visualize_attention)
-            _, _, decoder_outputs, attention_map = out
-            
-            
-            decoder_outputs = decoder_outputs.detach().cpu()
-            probs = F.log_softmax(decoder_outputs, dim=-1)
-            max_ = torch.argmax(probs, dim=-1)[0]
-            eos_idx_hyp = (max_ == self.trainloader.dataset.target.EOS).nonzero(as_tuple=True)[0]
-            hyp_trimmed = max_[:eos_idx_hyp[0].item()] if len(eos_idx_hyp) > 0 else max_
-            target_word = self.trainloader.dataset.target.itos(hyp_trimmed)
-            print(target_word)
-            
-            print("word lengths : ", len(source_word), len(target_word))
-            
-            if visualize_attention:
-                assert attention_map is not None
+            for source_word in source_words:
+                s_idxs = self.trainloader.dataset.source.stoi(source_word)
+                x = torch.tensor(s_idxs, dtype=torch.long).unsqueeze(0).to(self.device)
+                
+                out = self.model(x, teacher_forcing_p=0, beam_size=1, return_attention_map=visualize_attention)
+                _, _, decoder_outputs, attention_map = out
+                
+                
+                decoder_outputs = decoder_outputs.detach().cpu()
+                probs = F.log_softmax(decoder_outputs, dim=-1)
+                max_ = torch.argmax(probs, dim=-1)[0]
+                eos_idx_hyp = (max_ == self.trainloader.dataset.target.EOS).nonzero(as_tuple=True)[0]
+                hyp_trimmed = max_[:eos_idx_hyp[0].item()] if len(eos_idx_hyp) > 0 else max_
+                target_word = self.trainloader.dataset.target.itos(hyp_trimmed)
+                
                 attention_map = attention_map.squeeze(1, 2)[:, :-1]
                 attention_map = attention_map[:eos_idx_hyp[0].item()] if len(eos_idx_hyp) > 0 else attention_map
-                self.save_attention_map(attention_map)
-                
+                attention_maps_list.append({"attention_map":attention_map, "source_word":source_word, "target_word":target_word})
             
-    def save_attention_map(self, attn_tensor, save_path="attention_map.png", title="Attention Map"):
-        attn_np = attn_tensor.detach().cpu().numpy()
-        print("attn_np shape : ", attn_np.shape)
-        
-        print(attn_np)
-        
-        plt.figure(figsize=(10, 6))
-        
-        plt.imshow(attn_np, aspect='auto', cmap='viridis')
-        plt.colorbar(label='Attention Weight')
-        plt.xlabel("Encoder Time Steps")
-        plt.ylabel("Decoder Time Steps")
-        plt.title(title)
-        plt.tight_layout()
+            if visualize_attention:
+                self.save_attention_map(attention_maps_list)
+
+    def save_attention_map(self, attn_data_list, save_path="attention_maps.png", figsize=(16, 16)):
+        assert len(attn_data_list) == 9, "Expected exactly 9 samples for a 3x3 grid"
+
+        hindi_font = font_manager.FontProperties(fname=nirm)
+
+        fig, axes = plt.subplots(3, 3, figsize=figsize)
+        axes = axes.flatten()
+
+        for i, data in enumerate(attn_data_list):
+            attn = data["attention_map"].detach().cpu().numpy()
+            source = data["source_word"]
+            target = data["target_word"]
+
+            ax = axes[i]
+            im = ax.imshow(attn, aspect='auto', cmap='cmap')
+
+            ax.set_xticks(np.arange(len(source)))
+            ax.set_xticklabels(list(source), fontsize=8, fontproperties=hindi_font, rotation=45, ha="right")
+            ax.set_yticks(np.arange(len(target)))
+            ax.set_yticklabels(list(target), fontsize=8, fontproperties=hindi_font)
+
+            ax.set_title(f"Tgt: '{target}' | Src: '{source.replace('</s>', '')}", fontsize=10, fontproperties=hindi_font)
+
+        for j in range(len(attn_data_list), 9):
+            fig.delaxes(axes[j])
+
+        fig.tight_layout()
+        fig.colorbar(im, ax=axes.ravel().tolist(), orientation='vertical', fraction=0.015, pad=0.04)
         plt.savefig(save_path)
+        plt.close()
+
+        if self.logging:
+            wandb.log({"attention_maps_grid": wandb.Image(save_path, caption="3x3 grid of attention maps")})
+

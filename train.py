@@ -12,8 +12,11 @@ def main(args, logging):
     
     trainer = Trainer(config, logging=logging)
     trainer.train()
-    trainer.inference()
-    # trainer.predict_one("tughlakabad", visualize_attention=True)
+    trainer.inference(plot_attention=False)
+    
+    # sample_words_list = ["dampattiyon", "dikhayi", "navvadhu", "niveshakartaa", "bangbandhu", "bhadakaya", "lakshmidhar", "vasearche", "samprabhuta"]
+    
+    # trainer.predict_samples(sample_words_list, visualize_attention=True)
 
 
 if __name__ == "__main__":
@@ -33,14 +36,14 @@ if __name__ == "__main__":
     parser.add_argument("--max_epoch", type=int, default=10)
     parser.add_argument("--embedding_size", type=int, default=256)
     parser.add_argument("--hidden_size", type=int, default=256)
-    parser.add_argument("--encoder_num_layers", type=int, default=3)
-    parser.add_argument("--decoder_num_layers", type=int, default=2)
+    parser.add_argument("--encoder_num_layers", type=int, default=1)
+    parser.add_argument("--decoder_num_layers", type=int, default=1)
     parser.add_argument("--encoder_name", type=str, default="GRU", choices=["GRU", "LSTM", "RNN"])
     parser.add_argument("--decoder_name", type=str, default="GRU", choices=["GRU", "LSTM", "RNN"])
     parser.add_argument("--encoder_bidirectional", type=bool, default=True)
     parser.add_argument("--dropout_p", type=float, default=0.3)
     parser.add_argument("--max_length", type=int, default=32)
-    parser.add_argument("--apply_attention", type=bool, default=True)
+    parser.add_argument("--apply_attention", type=bool, default=False)
     parser.add_argument("--beam_size", type=int, default=3)
 
     
@@ -49,7 +52,7 @@ if __name__ == "__main__":
     
     if args.wandb_entity is not None or args.wandb_project is not None:
         wandb.init(project=args.wandb_project)
-        wandb.run.name = f"BestModelWithAttention_beam_{args.beam_size}_lr_{args.learning_rate}_hdsz_{args.hidden_size}_emb_{args.embedding_size}_enc_layers_{args.encoder_num_layers}_dec_layers_{args.decoder_num_layers}_enc_name_{args.encoder_name}_dec_name_{args.decoder_name}_enc_bidirectional_{args.encoder_bidirectional}_dropout_p_{args.dropout_p}_tfp_{args.teacher_forcing_p}_attn_{args.apply_attention}"
+        wandb.run.name = f"Best_no_attention_beam_{args.beam_size}_lr_{args.learning_rate}_hdsz_{args.hidden_size}_emb_{args.embedding_size}_enc_layers_{args.encoder_num_layers}_dec_layers_{args.decoder_num_layers}_enc_name_{args.encoder_name}_dec_name_{args.decoder_name}_enc_bidirectional_{args.encoder_bidirectional}_dropout_p_{args.dropout_p}_tfp_{args.teacher_forcing_p}_attn_{args.apply_attention}"
         logging=True
     else:
         logging=False
