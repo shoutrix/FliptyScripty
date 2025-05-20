@@ -72,6 +72,13 @@ class TrainerConfig:
         
 class Trainer:
     def __init__(self, config:TrainerConfig, logging):
+        """
+        Initializes the Trainer class by preparing datasets, dataloaders, model, optimizer, and logging setup.
+
+        Args:
+            config (TrainerConfig): Configuration object containing training hyperparameters.
+            logging (bool): Flag indicating whether to enable logging (e.g., with wandb).
+        """
 
         preprocessor(config.train_data_path, config.dev_data_path)
 
@@ -117,6 +124,9 @@ class Trainer:
 
 
     def train(self):
+        """
+        Runs the full training loop over the specified number of epochs, logging performance metrics if enabled.
+        """
         print("Starting Training ...")  
         for epoch in range(self.config.max_epoch):
             avg_loss, avg_acc = self.train_one_epoch(epoch)
@@ -133,6 +143,15 @@ class Trainer:
         
 
     def train_one_epoch(self, epoch):
+        """
+        Trains the model for a single epoch and returns average loss and accuracy.
+
+        Args:
+            epoch (int): Current epoch index.
+
+        Returns:
+            Tuple[float, float]: Average training loss and accuracy.
+        """
         self.model.train()
         loss_track = 0
         acc_track = 0
@@ -157,6 +176,15 @@ class Trainer:
         return avg_loss, avg_acc
     
     def validate_one_epoch(self, epoch):
+        """
+        Evaluates the model on the validation set for a single epoch.
+
+        Args:
+            epoch (int): Current epoch index.
+
+        Returns:
+            Tuple[float, float]: Average validation loss and accuracy.
+        """
         self.model.eval()
         valid_loss_track, valid_acc_track = 0, 0
         with torch.no_grad():
@@ -176,6 +204,13 @@ class Trainer:
     
 
     def inference(self, plot_attention=False):
+        """
+        Performs inference on the test set, computes BLEU score and accuracy, logs results,
+        and optionally plots attention maps.
+
+        Args:
+            plot_attention (bool): Whether to visualize attention maps for random test samples.
+        """
         print("Starting inference ...")
         self.model.eval()
         with torch.no_grad():
@@ -235,6 +270,17 @@ class Trainer:
  
 
     def scoring(self, refs, hyps, testset):
+        """
+        Computes the average BLEU score for predictions and converts token IDs to text sequences.
+
+        Args:
+            refs (List[Tensor]): Reference target sequences.
+            hyps (List[Tensor]): Hypothesized output sequences.
+            testset (Dataset): The test dataset used to access vocabulary mappings.
+
+        Returns:
+            Tuple[float, List[str], List[str]]: BLEU score, list of reference strings, and predicted strings.
+        """
         total_bleu = 0
         count = 0
         targets = []
@@ -263,6 +309,13 @@ class Trainer:
 
 
     def predict_samples(self, source_words, visualize_attention=False):
+        """
+        Predicts target words for a list of input source words and optionally generates attention visualizations.
+
+        Args:
+            source_words (List[str]): List of input words to transliterate.
+            visualize_attention (bool): Whether to save attention maps as images.
+        """
         attention_maps_list = []
         self.model.eval()
         with torch.no_grad():
@@ -291,6 +344,14 @@ class Trainer:
                 
 
     def save_attention_map(self, attn_data_list, save_path="attention_maps.png", figsize=(16, 16)):
+        """
+        Saves a 3x3 grid of attention heatmaps for model predictions.
+
+        Args:
+            attn_data_list (List[Dict]): List of dictionaries with attention maps and corresponding source/target words.
+            save_path (str): File path to save the attention visualization.
+            figsize (Tuple[int, int]): Figure size for the matplotlib plot.
+        """
         assert len(attn_data_list) == 9, "Expected exactly 9 samples for a 3x3 grid"
 
         hindi_font = font_manager.FontProperties(fname=nirm)
