@@ -10,6 +10,7 @@ import random
 from translit_model import TranslitModelConfig, TranslitModel
 import os
 import wandb
+import matplotlib.pyplot as plt
 
 lang_map = {
     "bengali": "bn",
@@ -29,7 +30,7 @@ lang_map = {
 class TrainerConfig:
     language:str = "hindi",
     data_path:str = "",
-    batch_size:int = 64,
+    batch_size:int = 256,
     num_workers:int = 16,
     learning_rate:float = 0.003,
     weight_decay:float = 0.0005,
@@ -47,7 +48,9 @@ class TrainerConfig:
     decoder_SOS: int = 0
     teacher_forcing_p: float = 0.8
     apply_attention: bool = True
+    beam_size: int = 1
     logging: bool = False
+    
     
     def __post_init__(self):
         if self.language not in lang_map:
@@ -61,7 +64,7 @@ class TrainerConfig:
             
         
 class Trainer:
-    def __init__(self, config:TrainerConfig, logging=False):
+    def __init__(self, config:TrainerConfig, logging):
 
         preprocessor(config.train_data_path, config.dev_data_path)
 
@@ -127,12 +130,13 @@ class Trainer:
         loss_track = 0
         acc_track = 0
         for x, y in tqdm(self.trainloader, desc=f"Epoch {epoch+1}, Training "):
+        # for x, y in self.trainloader:
             x = x.to(self.device, non_blocking=True)
             y = y.to(self.device, non_blocking=True)
             
             with torch.autocast(device_type=self.device, dtype=self.autocast_dtype):
-                out = self.model(x, y, teacher_forcing_p=self.config.teacher_forcing_p)
-                loss, acc, _ = out
+                out = self.model(x, y, teacher_forcing_p=self.config.teacher_forcing_p, beam_size=1)
+                loss, acc, _, _ = out
             
             self.optimizer.zero_grad()
             loss.backward()
@@ -150,11 +154,12 @@ class Trainer:
         valid_loss_track, valid_acc_track = 0, 0
         with torch.no_grad():
             for x, y in tqdm(self.validloader, desc=f"Epoch {epoch+1}, Validation "):
+            # for x, y in self.validloader:
                 x = x.to(self.device, non_blocking=True)
                 y = y.to(self.device, non_blocking=True)
                 with torch.autocast(device_type=self.device, dtype=self.autocast_dtype):
-                    out = self.model(x, y, teacher_forcing_p=0.0)
-                    loss, acc, _ = out
+                    out = self.model(x, y, teacher_forcing_p=0.0, beam_size=1)
+                    loss, acc, _, _ = out
                 valid_loss_track += loss.item()
                 valid_acc_track += acc.item()
             
@@ -172,32 +177,43 @@ class Trainer:
             for x, y in tqdm(self.testloader):
                 x = x.to(self.device, non_blocking=True)
                 with torch.autocast(device_type=self.device, dtype=self.autocast_dtype):
-                    out = self.model(x, teacher_forcing_p=0)
-                    _, _, decoder_outputs = out
+                    out = self.model(x, teacher_forcing_p=0, beam_size=self.config.beam_size)
+                    _, _, decoder_outputs, _ = out
 
+                # print("inference : ", decoder_outputs.shape)
                 decoder_outputs = decoder_outputs.detach().cpu()
                 y = y.cpu()
-
-                probs = F.log_softmax(decoder_outputs, dim=-1)
-                preds = torch.argmax(probs, dim=-1)
+                
+                if decoder_outputs.dim() == 3:
+                    decoder_outputs_probs = F.log_softmax(decoder_outputs, dim=-1)
+                    decoder_outputs = torch.argmax(decoder_outputs_probs, dim=-1)
+                    
 
                 all_refs.extend(list(y))
-                all_hyps.extend(list(preds))
+                all_hyps.extend(list(decoder_outputs))
 
             bleu_, targets, preds = self.scoring(all_refs, all_hyps, self.testloader.dataset)
             
+            count = 0
+            for t, p in zip(targets, preds):
+                if t == p:
+                    count+=1
+            acc = count / len(targets) * 100
+                    
+            print(f"Test Accuracy : {acc:.4f}")
+
             idx = list(range(len(targets)))
             random.shuffle(idx)
             
             print("BLEU score:", bleu_)
             if self.logging:
-                wandb.log({"bleu_score": bleu_})
+                wandb.log({"bleu_score": bleu_, "test_accuracy": acc})
                 
             idxs = random.sample(range(len(targets)+1), 10)
-            print("-------- Samples --------")
-            print(f"TARGETS\tPREDICTIONS")
-            for idx in idxs:
-                print(targets[idx], "\t", preds[idx])
+            # print("-------- Samples --------")
+            # print(f"TARGETS\tPREDICTIONS")
+            # for idx in idxs:
+            #     print(targets[idx], "\t", preds[idx])
             
             with open("results.txt", "w", encoding="utf-8") as f:
                 f.write("TARGETS\tPREDICTIONS\n\n")
@@ -230,3 +246,47 @@ class Trainer:
 
         bleu = total_bleu / count if count > 0 else 0.0
         return bleu, targets, preds
+
+
+    def predict_one(self, source_word, visualize_attention=False):
+        self.model.eval()
+        with torch.no_grad():
+            s_idxs = self.trainloader.dataset.source.stoi(source_word) + [self.trainloader.dataset.source.EOS]
+            x = torch.tensor(s_idxs, dtype=torch.long).unsqueeze(0).to(self.device)
+            
+            out = self.model(x, teacher_forcing_p=0, beam_size=1, return_attention_map=visualize_attention)
+            _, _, decoder_outputs, attention_map = out
+            
+            
+            decoder_outputs = decoder_outputs.detach().cpu()
+            probs = F.log_softmax(decoder_outputs, dim=-1)
+            max_ = torch.argmax(probs, dim=-1)[0]
+            eos_idx_hyp = (max_ == self.trainloader.dataset.target.EOS).nonzero(as_tuple=True)[0]
+            hyp_trimmed = max_[:eos_idx_hyp[0].item()] if len(eos_idx_hyp) > 0 else max_
+            target_word = self.trainloader.dataset.target.itos(hyp_trimmed)
+            print(target_word)
+            
+            print("word lengths : ", len(source_word), len(target_word))
+            
+            if visualize_attention:
+                assert attention_map is not None
+                attention_map = attention_map.squeeze(1, 2)[:, :-1]
+                attention_map = attention_map[:eos_idx_hyp[0].item()] if len(eos_idx_hyp) > 0 else attention_map
+                self.save_attention_map(attention_map)
+                
+            
+    def save_attention_map(self, attn_tensor, save_path="attention_map.png", title="Attention Map"):
+        attn_np = attn_tensor.detach().cpu().numpy()
+        print("attn_np shape : ", attn_np.shape)
+        
+        print(attn_np)
+        
+        plt.figure(figsize=(10, 6))
+        
+        plt.imshow(attn_np, aspect='auto', cmap='viridis')
+        plt.colorbar(label='Attention Weight')
+        plt.xlabel("Encoder Time Steps")
+        plt.ylabel("Decoder Time Steps")
+        plt.title(title)
+        plt.tight_layout()
+        plt.savefig(save_path)
