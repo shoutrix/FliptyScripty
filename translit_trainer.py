@@ -13,6 +13,7 @@ import wandb
 import matplotlib.pyplot as plt
 from matplotlib import font_manager
 import numpy as np
+from q6 import make_q6
 
 
 nirm = '/speech/shoutrik/torch_exp/FliptyScripty/Assignment3/Nirmala.ttf'
@@ -226,7 +227,7 @@ class Trainer:
                     
                 self.predict_samples(samples, True)
             
-            with open("results.txt", "w", encoding="utf-8") as f:
+            with open("with_attention_results.txt", "w", encoding="utf-8") as f:
                 f.write("TARGETS\tPREDICTIONS\n\n")
                 f.write("\n".join([f"{t}\t{p}" for t, p in zip(targets, preds)]))
                 
@@ -282,10 +283,12 @@ class Trainer:
                 
                 attention_map = attention_map.squeeze(1, 2)[:, :-1]
                 attention_map = attention_map[:eos_idx_hyp[0].item()] if len(eos_idx_hyp) > 0 else attention_map
-                attention_maps_list.append({"attention_map":attention_map, "source_word":source_word, "target_word":target_word})
+                attention_maps_list.append({"attention_map":attention_map.detach().cpu().numpy(), "source_word":source_word.replace('</s>', ''), "target_word":target_word})
             
             if visualize_attention:
                 self.save_attention_map(attention_maps_list)
+                make_q6(attention_maps_list)
+                
 
     def save_attention_map(self, attn_data_list, save_path="attention_maps.png", figsize=(16, 16)):
         assert len(attn_data_list) == 9, "Expected exactly 9 samples for a 3x3 grid"
@@ -296,12 +299,12 @@ class Trainer:
         axes = axes.flatten()
 
         for i, data in enumerate(attn_data_list):
-            attn = data["attention_map"].detach().cpu().numpy()
+            attn = data["attention_map"]
             source = data["source_word"]
             target = data["target_word"]
 
             ax = axes[i]
-            im = ax.imshow(attn, aspect='auto', cmap='cmap')
+            im = ax.imshow(attn, aspect='auto', cmap='viridis')
 
             ax.set_xticks(np.arange(len(source)))
             ax.set_xticklabels(list(source), fontsize=8, fontproperties=hindi_font, rotation=45, ha="right")
