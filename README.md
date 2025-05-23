@@ -17,7 +17,7 @@ This repository implements a **sequence-to-sequence transliteration model** usin
 
 ## 📂 Dataset Structure
 
-Use the [Dakshina dataset](https://github.com/google-research-datasets/dakshina) and structure it as:
+Use the [Dakshina dataset](https://github.com/google-research-datasets/dakshina)
 
 
 ---
@@ -44,7 +44,7 @@ pip install -r requirements.txt
 Use the following command to train the model:
 
 ```bash
-python run.py \
+python train.py \
   --language hindi \
   --data_path /path/to/dakshina_dataset \
   --encoder_name GRU \
